@@ -345,9 +345,9 @@ To see `generateText` in action, check out [these examples](#examples).
             {
               name: 'description',
               isOptional: true,
-              type: 'string',
+              type: 'string | ((options: { context: CONTEXT; experimental_sandbox?: Experimental_Sandbox }) => string)',
               description:
-                'Information about the purpose of the tool including details on how and when it can be used by the model.',
+                'Information about the purpose of the tool including details on how and when it can be used by the model. Provide a string for a fixed description, or a function to derive the description from the tool-specific context and optional experimental sandbox before each model call.',
             },
             {
               name: 'inputSchema',
@@ -590,7 +590,7 @@ To see `generateText` in action, check out [these examples](#examples).
       type: '(options: PrepareStepOptions) => PrepareStepResult<TOOLS> | Promise<PrepareStepResult<TOOLS>>',
       isOptional: true,
       description:
-        'Optional function that you can use to provide different settings for a step. You can modify the model, tool choices, active tools, instructions, input messages, and sandbox for each step.',
+        'Optional function that you can use to provide different settings for a step. You can modify the model, tool choices, active tools, instructions, input messages, and experimental sandbox for each step.',
       properties: [
         {
           type: 'PrepareStepFunction<TOOLS>',
@@ -620,6 +620,18 @@ To see `generateText` in action, check out [these examples](#examples).
                       description: 'The model that is being used.',
                     },
                     {
+                      name: 'instructions',
+                      type: 'Instructions | undefined',
+                      description:
+                        'The instructions that will be sent to the model for the current step. If prepareStep returns an instructions override, those instructions carry forward to later steps.',
+                    },
+                    {
+                      name: 'initialInstructions',
+                      type: 'Instructions | undefined',
+                      description:
+                        'The initial instructions that were passed into generateText or streamText.',
+                    },
+                    {
                       name: 'messages',
                       type: 'Array<ModelMessage>',
                       description:
@@ -639,11 +651,11 @@ To see `generateText` in action, check out [these examples](#examples).
                         'The per-tool context map passed via the `toolsContext` setting.',
                     },
                     {
-                      name: 'sandbox',
-                      type: 'Sandbox | undefined',
+                      name: 'experimental_sandbox',
+                      type: 'Experimental_Sandbox | undefined',
                       isOptional: true,
                       description:
-                        'The sandbox environment passed via the `sandbox` setting.',
+                        'The experimental sandbox environment passed via the `experimental_sandbox` setting.',
                     },
                   ],
                 },
@@ -682,7 +694,7 @@ To see `generateText` in action, check out [these examples](#examples).
               type: 'Instructions',
               isOptional: true,
               description:
-                'Optionally override the instructions sent to the model for this step.',
+                'Optionally override the instructions sent to the model for this step. The override carries forward to later steps until prepareStep returns another instructions or system override.',
             },
             {
               name: 'messages',
@@ -705,11 +717,11 @@ To see `generateText` in action, check out [these examples](#examples).
                 'Per-tool context map. Changing it will affect tool-specific context in this step and all subsequent steps.',
             },
             {
-              name: 'sandbox',
-              type: 'Sandbox',
+              name: 'experimental_sandbox',
+              type: 'Experimental_Sandbox',
               isOptional: true,
               description:
-                'Sandbox environment for this step. Changing it will affect tool execution in this step only.',
+                'Experimental sandbox environment for this step. Changing it will affect tool execution in this step only.',
             },
             {
               name: 'providerOptions',
@@ -736,11 +748,11 @@ To see `generateText` in action, check out [these examples](#examples).
         'Per-tool context map keyed by tool name. Required when at least one tool defines `contextSchema`; not accepted when no tools need context.',
     },
     {
-      name: 'sandbox',
-      type: 'Sandbox',
+      name: 'experimental_sandbox',
+      type: 'Experimental_Sandbox',
       isOptional: true,
       description:
-        'Sandbox environment that is passed through to `prepareStep` and tool execution. Tools can access it from their execution options.',
+        'Experimental sandbox environment that is passed through to `prepareStep`, tool description functions, and tool execution. Tools can access it from their description function options and execution options.',
     },
     {
       name: 'experimental_download',
@@ -1323,6 +1335,42 @@ To see `generateText` in action, check out [these examples](#examples).
               description:
                 'The content parts produced by the model call (text, reasoning, files, tool calls, etc.).',
             },
+            {
+              name: 'responseId',
+              type: 'string',
+              description:
+                'The provider-returned response ID for this model call.',
+            },
+            {
+              name: 'performance',
+              type: '{ responseTimeMs: number; tokensPerSecond: number; timeToFirstTokenMs: number | undefined }',
+              description: 'Performance metrics for the model call.',
+              properties: [
+                {
+                  type: 'LanguageModelCallPerformance',
+                  parameters: [
+                    {
+                      name: 'responseTimeMs',
+                      type: 'number',
+                      description:
+                        'Time spent waiting for the language model response in milliseconds.',
+                    },
+                    {
+                      name: 'tokensPerSecond',
+                      type: 'number',
+                      description:
+                        'Average number of output tokens per second during the language model response.',
+                    },
+                    {
+                      name: 'timeToFirstTokenMs',
+                      type: 'number | undefined',
+                      description:
+                        'Time until the first text, reasoning, or tool input delta was received in milliseconds. Only available for streaming model calls.',
+                    },
+                  ],
+                },
+              ],
+            },
           ],
         },
       ],
@@ -1388,7 +1436,7 @@ To see `generateText` in action, check out [these examples](#examples).
                 'The full tool call object containing toolName, toolCallId, input, and metadata.',
             },
             {
-              name: 'durationMs',
+              name: 'toolExecutionMs',
               type: 'number',
               description:
                 'The wall-clock duration of the tool execution in milliseconds.',
@@ -1492,7 +1540,7 @@ To see `generateText` in action, check out [these examples](#examples).
             {
               name: 'sources',
               type: 'Array<Source>',
-              description: 'The sources that were used to generate the text.',
+              description: 'The sources that were used in this step.',
             },
             {
               name: 'toolCalls',
@@ -1631,6 +1679,49 @@ To see `generateText` in action, check out [these examples](#examples).
               ],
             },
             {
+              name: 'performance',
+              type: 'StepResultPerformance',
+              description:
+                'Timing and throughput metrics for the step. For `generateText`, `timeToFirstTokenMs` is undefined.',
+              properties: [
+                {
+                  type: 'StepResultPerformance',
+                  parameters: [
+                    {
+                      name: 'tokensPerSecond',
+                      type: 'number',
+                      description:
+                        'Average number of output tokens per second for the language model response.',
+                    },
+                    {
+                      name: 'stepTimeMs',
+                      type: 'number',
+                      description:
+                        'Total time spent on the step, including language model response time and tool execution time, in milliseconds.',
+                    },
+                    {
+                      name: 'responseTimeMs',
+                      type: 'number',
+                      description:
+                        'Time spent waiting for the language model response in milliseconds.',
+                    },
+                    {
+                      name: 'toolExecutionMs',
+                      type: 'Readonly<Record<string, number>>',
+                      description:
+                        'Time spent executing each client-side tool call in the step in milliseconds, keyed by tool call ID.',
+                    },
+                    {
+                      name: 'timeToFirstTokenMs',
+                      type: 'number | undefined',
+                      description:
+                        'Time until the first text, reasoning, or tool input delta was received in milliseconds. Only available for streaming steps.',
+                    },
+                  ],
+                },
+              ],
+            },
+            {
               name: 'warnings',
               type: 'CallWarning[] | undefined',
               description:
@@ -1729,10 +1820,10 @@ To see `generateText` in action, check out [these examples](#examples).
     },
     {
       name: 'onFinish',
-      type: '(event: StepResult<TOOLS> & { steps: StepResult<TOOLS>[]; totalUsage: LanguageModelUsage }) => PromiseLike<void> | void',
+      type: '(event: GenerateTextEndEvent<TOOLS>) => PromiseLike<void> | void',
       isOptional: true,
       description:
-        'Callback that is called when the entire generation completes (all steps finished). The event includes the final step result properties along with aggregated data from all steps.',
+        'Callback that is called when the entire generation completes (all steps finished). The event includes the final step result properties, excluding direct `performance`, along with aggregated data from all steps. Use `event.steps` for per-step performance metrics.',
       properties: [
         {
           type: 'GenerateTextEndEvent',
@@ -1885,7 +1976,7 @@ To see `generateText` in action, check out [these examples](#examples).
             {
               name: 'content',
               type: 'Array<ContentPart<TOOLS>>',
-              description: 'The content that was generated in the final step.',
+              description: 'The content that was generated in all steps.',
             },
             {
               name: 'providerMetadata',
@@ -1952,8 +2043,7 @@ To see `generateText` in action, check out [these examples](#examples).
             {
               name: 'sources',
               type: 'Array<Source>',
-              description:
-                'Sources that have been used as input to generate the response. For multi-step generation, the sources are accumulated from all steps.',
+              description: 'Sources that have been used in the final step.',
               properties: [
                 {
                   type: 'Source',
@@ -1994,7 +2084,7 @@ To see `generateText` in action, check out [these examples](#examples).
             {
               name: 'files',
               type: 'Array<GeneratedFile>',
-              description: 'Files that were generated in the final step.',
+              description: 'Files that were generated in all steps.',
               properties: [
                 {
                   type: 'GeneratedFile',
@@ -2057,7 +2147,7 @@ To see `generateText` in action, check out [these examples](#examples).
               name: 'warnings',
               type: 'CallWarning[] | undefined',
               description:
-                'Warnings from the model provider (e.g. unsupported settings).',
+                'Warnings from the model provider (e.g. unsupported settings) in all steps.',
             },
             {
               name: 'request',
@@ -2180,7 +2270,7 @@ To see `generateText` in action, check out [these examples](#examples).
     {
       name: 'content',
       type: 'Array<ContentPart<TOOLS>>',
-      description: 'The content that was generated in the last step.',
+      description: 'The content that was generated in all steps.',
     },
     {
       name: 'text',
@@ -2287,7 +2377,7 @@ To see `generateText` in action, check out [these examples](#examples).
     {
       name: 'files',
       type: 'Array<GeneratedFile>',
-      description: 'Files that were generated in the final step.',
+      description: 'Files that were generated in all steps.',
       properties: [
         {
           type: 'GeneratedFile',
@@ -2314,36 +2404,36 @@ To see `generateText` in action, check out [these examples](#examples).
     {
       name: 'toolCalls',
       type: 'ToolCallArray<TOOLS>',
-      description: 'The tool calls that were made in the last step.',
+      description: 'The tool calls that were made in all steps.',
     },
     {
       name: 'toolResults',
       type: 'ToolResultArray<TOOLS>',
-      description: 'The results of the tool calls from the last step.',
+      description: 'The results of the tool calls from all steps.',
     },
     {
       name: 'staticToolCalls',
       type: 'Array<StaticToolCall<TOOLS>>',
       description:
-        'The static tool calls that have been executed in the last step.',
+        'The static tool calls that have been executed in all steps.',
     },
     {
       name: 'dynamicToolCalls',
       type: 'Array<DynamicToolCall>',
       description:
-        'The dynamic tool calls that have been executed in the last step.',
+        'The dynamic tool calls that have been executed in all steps.',
     },
     {
       name: 'staticToolResults',
       type: 'Array<StaticToolResult<TOOLS>>',
       description:
-        'The static tool results that have been generated in the last step.',
+        'The static tool results that have been generated in all steps.',
     },
     {
       name: 'dynamicToolResults',
       type: 'Array<DynamicToolResult>',
       description:
-        'The dynamic tool results that have been generated in the last step.',
+        'The dynamic tool results that have been generated in all steps.',
     },
     {
       name: 'finishReason',
@@ -2557,7 +2647,7 @@ To see `generateText` in action, check out [these examples](#examples).
       name: 'warnings',
       type: 'Warning[] | undefined',
       description:
-        'Warnings from the model provider (e.g. unsupported settings).',
+        'Warnings from the model provider (e.g. unsupported settings) in all steps.',
     },
     {
       name: 'responseMessages',
@@ -2613,7 +2703,7 @@ To see `generateText` in action, check out [these examples](#examples).
             {
               name: 'content',
               type: 'Array<ContentPart<TOOLS>>',
-              description: 'The content that was generated in the last step.',
+              description: 'The content that was generated in the final step.',
             },
             {
               name: 'text',
@@ -2701,7 +2791,7 @@ To see `generateText` in action, check out [these examples](#examples).
             {
               name: 'sources',
               type: 'Array<Source>',
-              description: 'The sources that were used to generate the text.',
+              description: 'Sources that have been used in this step.',
               properties: [
                 {
                   type: 'Source',
